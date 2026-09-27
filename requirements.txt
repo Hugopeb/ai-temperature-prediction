@@ -2,13 +2,18 @@
 numpy==1.26.0
 pandas==2.1.1
 torch==2.9.1
-torchvision==0.24.1
 scikit-learn==1.3.0
 joblib==1.3.2
+
+# Data access and preprocessing
+scipy
+xarray
+netCDF4
 
 # Notebook / visualization
 jupyter
 matplotlib==3.8.0
+seaborn
 
 # Optional utilities for nicer notebook experience
 ipython

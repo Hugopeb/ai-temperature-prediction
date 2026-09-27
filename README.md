@@ -1,134 +1,107 @@
 # AITemperaturePrediction
 
-![Python](https://img.shields.io/badge/python-3.11-blue)
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-neural%20network-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-archived-lightgrey)
+
+Neural network post-processing of the **WRF** numerical weather model to forecast 2 m air temperature at weather stations across **Galicia (Spain)**. This project was carried out during my internship at **MeteoGalicia**, the Galician meteorological agency, with all data processing and training run on the **CESGA** supercomputing cluster.
+
+> **About this repository:** this is a showcase of the work done during the internship. The original datasets (MeteoGalicia station observations and WRF model outputs) are no longer available, so the code **cannot be re-run**. The notebooks keep the outputs from the original executions, and the figures in `images/` are the actual results obtained at the time.
 
 ---
 
-This repository contains the work developed during my internship at a meteorology agency, where I focused on applying neural networks to forecast temperature. The goal of the project was to explore how data-driven models can capture temporal and spatial patterns in meteorological data and assess their effectiveness for short-term temperature prediction.
+## The problem
 
-The project is primarily research- and learning-oriented, emphasizing model design, experimentation, and evaluation rather than production-level deployment.
-
---- 
-
-## Features
-
--Implementation of neural network models for temperature forecasting
-
-![neuralnet_class](images/neuralnet_class.png)
-
--High-level features for better performance and proper worklow
-
-![features](images/neuralnet_features.png)
-
--Data preprocessing and feature engineering for meteorological datasets
-
-![features](images/DATA_class.png)
-
--Training and evaluation pipelines for time-series prediction
-
--Visualization tools for model performance and forecast results
-
-![features](images/linear_WRF_comparison.png)
-![features](images/linear_WRF_boxplot.png)
-
--Well-documented notebooks and scripts explaining design choices
+Numerical weather models like WRF simulate the atmosphere on a grid, and their raw 2 m temperature forecasts carry systematic errors at specific locations: coastal effects, complex terrain, and particularly **daily maximum and minimum temperatures**. The goal was to learn a correction on top of WRF: given the model's forecast variables at a station, predict the temperature that was actually observed.
 
 ---
 
-## Installation
+## Pipeline
 
+### 1. Building the dataset
 
-1. **Clone the repository:**
+- Merged hourly **WRF forecasts** with hourly **observations from weather stations** across Galicia (2008–2025), aligned by station and timestamp.
+- Model variables at several vertical levels: surface pressure, 2 m temperature, geopotential height, water vapour, wind components (U, V), temperature aloft, and precipitation-related fields.
 
-```bash
-git clone https://github.com/Hugopeb/AITemperaturePrediction.git
-cd AITemperaturePrediction
-```
+### 2. Feature engineering
 
-2. **Create a virtual environment**
+Galicia's climate changes a lot over short distances, driven by the Atlantic and a rugged terrain. To capture this, I added:
 
-```bash
-python -m venv AITemperaturePrediction_VENV
-source AITemperaturePrediction/bin/activate
-```
+- **Sea percentage** around each station: a land/sea mask from MeteoGalicia's 1 km WRF grid, smoothed over a ~25 km window and assigned to each station by nearest-neighbour lookup (KD-tree).
+- **Orography**, latitude and longitude.
+- **Cyclical time features**: sine/cosine encodings of hour of day and day of year, so the model sees 23:00 → 00:00 and 31 Dec → 1 Jan as continuous.
 
-3. **Install required packages**
+![Sea mask, sea percentage and orography of Galicia](images/meteorological_variables.png)
 
-```bash
-pip install -r requirements.txt
-```
----
+### 3. Multicollinearity analysis
 
-## Usage / Examples
+The same variable at nearby vertical levels is almost perfectly correlated (|r| > 0.9), which made a linear regression unstable, with huge coefficients of opposite sign cancelling each other out. Keeping a single representative level per variable group gave virtually the same R² (≈ 0.75) with interpretable coefficients. For the neural network, a new dataset was built using levels far apart in the vertical (0, 7 and 12) to reduce redundancy.
 
-After installing dependencies and setting up the virtual
-environment you have two different options.
+![Correlation matrix (only |r| > 0.7 shown)](images/correlation_matrix.png)
 
-### Using the Jupyter Notebooks
+### 4. Linear baseline
 
-The notebooks in this repository document the full development process of the project. They include explanations of the methodology, commented code, and visualizations that illustrate each step of the workflow. Through a combination of narrative text, graphs, and experiments, the notebooks show how the data is processed, how the neural networks are designed and trained, and how the results are evaluated and interpreted.
+A linear regression lowers the overall hourly MAE compared to raw WRF (**2.35 °C vs 3.47 °C**), but that result is misleading. Most hours are "ordinary" temperatures that are easy to fit, and the linear model **fails on daily extremes**, which are what matters most operationally:
 
-Each notebook is intended to be read sequentially and serves both as documentation of the work done during the internship and as a learning resource for understanding the modeling choices and outcomes.
+| Mean absolute error of daily extremes | Linear model | WRF |
+|---|---|---|
+| Daily maximum | 2.78 °C | 1.43 °C |
+| Daily minimum | 1.84 °C | 1.24 °C |
 
-```bash
-jupyter notebook NOTEBOOKS/data_preproccessing_github.ipynb
-jupyter notebook NOTEBOOKS/Neural_network.ipynb
-```
+![Monthly error of the linear model vs WRF](images/linear_WRF_comparison.png)
 
-### Using the Python script
+This showed that a more flexible, non-linear model was needed.
 
-If someone wants to **run the code automatically**:
+### 5. Neural network (PyTorch)
 
-```bash
-python model.py
-```
+A fully connected network trained on standardised inputs to predict the observed temperature:
 
-This way you can just modify the code without having to go
-through the whole notebook and its explanations.
+- 3 hidden layers (128 → 64 → 32) with ReLU and dropout (0.2)
+- Adam optimiser (lr = 1e-3, weight decay 1e-5), MSE loss, batch size 256
+- `ReduceLROnPlateau` learning-rate scheduler and custom early stopping
+- 80/20 train/validation split, keeping the best model by validation loss
+
+![Neural network definition](images/neuralnet_class.png)
 
 ---
 
-## Project Structure
+## Results
 
-Here’s an overview of the files and folders in this project:
+The neural network reduces the error of **both daily maximum and minimum temperatures** compared to WRF: medians of roughly 1.2 °C vs 1.6 °C for maxima and 1.1 °C vs 1.55 °C for minima, with a noticeably narrower error spread and fewer large misses.
 
-- **data_preproccessing_github.ipynb**: In this notebook I explain how we treated data before feeding it into the net.
-- **Neural_network.ipynb**: In here we implement the neural network and its features. We also analyze the results obtained 
-- **model.py**: Contains the classes and functions defining your neural network layers and forward/backward passes.
-- **images/**: Visual outputs to showcase results, mainly filter activations.
-- **requirements.txt**: Install all Python packages needed with `pip install -r requirements.txt`
-- **README.md**: This file, explaining the project, how to use it, and providing examples.
-- **LICENSE**: File containing the MIT License.
+![Neural network vs WRF on extreme temperatures](images/neuralnet_WRF_boxplot.png)
+
+---
+
+## Limitations
+
+Some things I would do differently today:
+
+- **Random train/validation split.** With hourly time series, neighbouring hours end up in both sets, which makes validation optimistic. A split by time period (e.g. train on earlier years, validate on the last one) would give a more honest estimate.
+- **No independent test set.** Model selection and final evaluation used the same validation data.
+- **Uniform loss weighting.** The dataset included a per-sample weight column that was never used in the loss. Weighting samples to emphasise extreme temperatures is the natural next step.
+- **Not reproducible** since the data is gone (see note above).
+
+---
+
+## Repository structure
+
+| Path | Contents |
+|---|---|
+| `NOTEBOOKS/data_preproccessing_github.ipynb` | Dataset construction, feature engineering, correlation analysis and linear baseline (with original outputs) |
+| `NOTEBOOKS/Neural_network.ipynb` | Neural network design, training loop and evaluation, explained step by step |
+| `images/` | Figures from the original runs |
+| `requirements.txt` | Python packages used in the project |
+
+---
+
+## Tech stack
+
+Python · PyTorch · scikit-learn · pandas · NumPy · xarray / netCDF · SciPy · Matplotlib / Seaborn · HPC (CESGA)
 
 ---
 
 ## License
 
-This project is licensed under the **MIT License**.
-
-You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of this project, under the following conditions:
-
-- The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-**Disclaimer:** The software is provided "as is", without warranty of any kind, express or implied. The authors are not responsible for any claims, damages, or other liabilities.
-
-For the full license text, see the [LICENSE](LICENSE) file.
-
----
-
-## Conclusion
-
-During this internship project, we successfully developed a neural network capable of predicting temperature with high accuracy. In our experiments, the network was able to outperform the WRF (Weather Research and Forecasting) model, demonstrating the potential of data-driven approaches for meteorological forecasting. This project focused exclusively on temperature prediction, but it highlights how neural networks can capture complex patterns in environmental data.
-
-![neuralnet_WRF_comparison](images/neuralnet_WRF_boxplot.png "Boxplot comparison of the neural net and the WRF model")
-
----
-
-## Notes
-
-This project was developed as part of an internship and is intended for educational and research purposes. While the models demonstrate the potential of neural networks for temperature forecasting, they are not optimized for operational meteorological use.
-
-Due to their size, I cannot upload the compressed data files WRF.tar.gz and so the easiest possible solution would be to use Dropbox/Google Drive personally.
-
----
+Released under the [MIT License](LICENSE).
