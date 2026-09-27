@@ -1,4 +1,4 @@
-# AITemperaturePrediction
+# AI Temperature Prediction
 
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![PyTorch](https://img.shields.io/badge/PyTorch-neural%20network-orange)
